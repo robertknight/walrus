@@ -111,22 +111,24 @@ impl Module {
         log::debug!("parse element section");
         for (i, segment) in section.into_iter().enumerate() {
             let segment = segment?;
-            let ty = ValType::parse(&segment.ty)?;
+            let ty = ValType::parse_ref(&segment.ty)?;
             match ty {
                 ValType::Funcref => {}
                 _ => bail!("only funcref type allowed in element segments"),
             }
-            let members = segment
-                .items
-                .get_items_reader()?
-                .into_iter()
-                .map(|e| -> Result<_> {
-                    Ok(match e? {
-                        wasmparser::ElementItem::Func(f) => Some(ids.get_func(f)?),
-                        wasmparser::ElementItem::Null(_) => None,
+
+            let members = match segment.items {
+                wasmparser::ElementItems::Expressions(_) => {
+                    bail!("expressions not supported in element segments")
+                }
+                wasmparser::ElementItems::Functions(funcs) => funcs
+                    .into_iter()
+                    .map(|func_idx| -> Result<_> {
+                        let func_idx = func_idx?;
+                        Ok(Some(ids.get_func(func_idx)?))
                     })
-                })
-                .collect::<Result<_>>()?;
+                    .collect::<Result<_>>()?,
+            };
             let id = self.elements.arena.next_id();
 
             let kind = match segment.kind {
@@ -134,12 +136,13 @@ impl Module {
                 wasmparser::ElementKind::Declared => ElementKind::Declared,
                 wasmparser::ElementKind::Active {
                     table_index,
-                    init_expr,
+                    offset_expr,
                 } => {
+                    let table_index = table_index.expect("expected table index");
                     let table = ids.get_table(table_index)?;
                     self.tables.get_mut(table).elem_segments.insert(id);
 
-                    let offset = InitExpr::eval(&init_expr, ids)
+                    let offset = InitExpr::eval(&offset_expr, ids)
                         .with_context(|| format!("in segment {}", i))?;
                     match offset {
                         InitExpr::Value(Value::I32(_)) => {}

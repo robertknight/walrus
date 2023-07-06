@@ -42,6 +42,7 @@ use id_arena::Id;
 use log::warn;
 use std::fs;
 use std::mem;
+use std::ops::Range;
 use std::path::Path;
 use wasmparser::{Parser, Payload, Validator, WasmFeatures};
 
@@ -92,7 +93,7 @@ pub struct CodeTransform {
     pub code_section_start: usize,
 
     /// Emitted binary ranges of functions
-    pub function_ranges: Vec<(Id<Function>, wasmparser::Range)>,
+    pub function_ranges: Vec<(Id<Function>, Range<usize>)>,
 }
 
 impl Module {
@@ -131,8 +132,7 @@ impl Module {
         let mut ret = Module::default();
         ret.config = config.clone();
         let mut indices = IndicesToIds::default();
-        let mut validator = Validator::new();
-        validator.wasm_features(WasmFeatures {
+        let mut validator = Validator::new_with_features(WasmFeatures {
             reference_types: !config.only_stable_features,
             multi_value: true,
             bulk_memory: !config.only_stable_features,
@@ -147,8 +147,12 @@ impl Module {
 
         for payload in Parser::new(0).parse_all(wasm) {
             match payload? {
-                Payload::Version { num, range } => {
-                    validator.version(num, &range)?;
+                Payload::Version {
+                    num,
+                    encoding,
+                    range,
+                } => {
+                    validator.version(num, encoding, &range)?;
                 }
                 Payload::DataSection(s) => {
                     validator
@@ -217,22 +221,23 @@ impl Module {
                     ret.funcs.code_section_offset = range.start;
                 }
                 Payload::CodeSectionEntry(body) => {
-                    let validator = validator.code_section_entry()?;
+                    let validator = validator
+                        .code_section_entry(&body)?
+                        .into_validator(Default::default());
                     local_functions.push((body, validator));
                 }
-                Payload::CustomSection {
-                    name,
-                    data,
-                    data_offset,
-                    range: _range,
-                } => {
+                Payload::CustomSection(reader) => {
+                    let name = reader.name();
+                    let data = reader.data();
+                    let data_offset = reader.data_offset();
                     let result = match name {
                         "producers" => wasmparser::ProducersSectionReader::new(data, data_offset)
                             .map_err(anyhow::Error::from)
                             .and_then(|s| ret.parse_producers_section(s)),
-                        "name" => wasmparser::NameSectionReader::new(data, data_offset)
-                            .map_err(anyhow::Error::from)
-                            .and_then(|r| ret.parse_name_section(r, &indices)),
+                        "name" => {
+                            let nsr = wasmparser::NameSectionReader::new(data, data_offset);
+                            ret.parse_name_section(nsr, &indices)
+                        }
                         _ => {
                             log::debug!("parsing custom section `{}`", name);
                             if name.starts_with(".debug") {
@@ -258,35 +263,51 @@ impl Module {
                     unreachable!()
                 }
 
-                Payload::End => validator.end()?,
+                Payload::End(offset) => {
+                    validator.end(offset)?;
+                }
 
                 // the module linking proposal is not implemented yet.
-                Payload::AliasSection(s) => {
-                    validator.alias_section(&s)?;
-                    bail!("not supported yet");
-                }
                 Payload::InstanceSection(s) => {
                     validator.instance_section(&s)?;
                     bail!("not supported yet");
                 }
-                Payload::ModuleSectionEntry {
-                    parser: _,
-                    range: _,
-                } => {
-                    validator.module_section_entry();
+                Payload::ComponentSection { parser: _, range } => {
+                    validator.component_section(&range)?;
                     bail!("not supported yet");
                 }
-                Payload::ModuleSectionStart {
-                    count,
-                    range,
-                    size: _,
-                } => {
-                    validator.module_section_start(count, &range)?;
+                Payload::ComponentAliasSection(s) => {
+                    validator.component_alias_section(&s)?;
+                    bail!("not supported yet");
+                }
+                Payload::ComponentStartSection { start, range } => {
+                    validator.component_start_section(&start, &range)?;
+                    bail!("not supported yet");
+                }
+                Payload::ComponentCanonicalSection(_) => {
+                    bail!("not supported yet");
+                }
+                Payload::ComponentImportSection(_) => {
+                    bail!("not supported yet");
+                }
+                Payload::ComponentExportSection(_) => {
+                    bail!("not supported yet");
+                }
+                Payload::ComponentInstanceSection(_) => {
+                    bail!("not supported yet");
+                }
+                Payload::ComponentTypeSection(_) => {
                     bail!("not supported yet");
                 }
                 // exception handling is not implemented yet.
                 Payload::TagSection(s) => {
                     validator.tag_section(&s)?;
+                    bail!("not supported yet");
+                }
+                Payload::ModuleSection { .. } => {
+                    bail!("not supported yet");
+                }
+                Payload::CoreTypeSection(_) => {
                     bail!("not supported yet");
                 }
             }
@@ -414,13 +435,12 @@ impl Module {
         log::debug!("parse name section");
         for name in names {
             match name? {
-                wasmparser::Name::Module(m) => {
-                    self.name = Some(m.get_name()?.to_string());
+                wasmparser::Name::Module { name, .. } => {
+                    self.name = Some(name.to_string());
                 }
-                wasmparser::Name::Function(f) => {
-                    let mut map = f.get_map()?;
-                    for _ in 0..map.get_count() {
-                        let naming = map.read()?;
+                wasmparser::Name::Function(map) => {
+                    for naming in map {
+                        let naming = naming?;
                         match indices.get_func(naming.index) {
                             Ok(id) => self.funcs.get_mut(id).name = Some(naming.name.to_string()),
                             // If some tool fails to GC function names properly,
@@ -430,20 +450,18 @@ impl Module {
                         }
                     }
                 }
-                wasmparser::Name::Type(t) => {
-                    let mut map = t.get_map()?;
-                    for _ in 0..map.get_count() {
-                        let naming = map.read()?;
+                wasmparser::Name::Type(map) => {
+                    for naming in map {
+                        let naming = naming?;
                         match indices.get_type(naming.index) {
                             Ok(id) => self.types.get_mut(id).name = Some(naming.name.to_string()),
                             Err(e) => warn!("in name section: {}", e),
                         }
                     }
                 }
-                wasmparser::Name::Memory(m) => {
-                    let mut map = m.get_map()?;
-                    for _ in 0..map.get_count() {
-                        let naming = map.read()?;
+                wasmparser::Name::Memory(map) => {
+                    for naming in map {
+                        let naming = naming?;
                         match indices.get_memory(naming.index) {
                             Ok(id) => {
                                 self.memories.get_mut(id).name = Some(naming.name.to_string())
@@ -452,30 +470,27 @@ impl Module {
                         }
                     }
                 }
-                wasmparser::Name::Table(t) => {
-                    let mut map = t.get_map()?;
-                    for _ in 0..map.get_count() {
-                        let naming = map.read()?;
+                wasmparser::Name::Table(map) => {
+                    for naming in map {
+                        let naming = naming?;
                         match indices.get_table(naming.index) {
                             Ok(id) => self.tables.get_mut(id).name = Some(naming.name.to_string()),
                             Err(e) => warn!("in name section: {}", e),
                         }
                     }
                 }
-                wasmparser::Name::Data(d) => {
-                    let mut map = d.get_map()?;
-                    for _ in 0..map.get_count() {
-                        let naming = map.read()?;
+                wasmparser::Name::Data(map) => {
+                    for naming in map {
+                        let naming = naming?;
                         match indices.get_data(naming.index) {
                             Ok(id) => self.data.get_mut(id).name = Some(naming.name.to_string()),
                             Err(e) => warn!("in name section: {}", e),
                         }
                     }
                 }
-                wasmparser::Name::Element(e) => {
-                    let mut map = e.get_map()?;
-                    for _ in 0..map.get_count() {
-                        let naming = map.read()?;
+                wasmparser::Name::Element(map) => {
+                    for naming in map {
+                        let naming = naming?;
                         match indices.get_element(naming.index) {
                             Ok(id) => {
                                 self.elements.get_mut(id).name = Some(naming.name.to_string())
@@ -484,24 +499,21 @@ impl Module {
                         }
                     }
                 }
-                wasmparser::Name::Global(e) => {
-                    let mut map = e.get_map()?;
-                    for _ in 0..map.get_count() {
-                        let naming = map.read()?;
+                wasmparser::Name::Global(map) => {
+                    for naming in map {
+                        let naming = naming?;
                         match indices.get_global(naming.index) {
                             Ok(id) => self.globals.get_mut(id).name = Some(naming.name.to_string()),
                             Err(e) => warn!("in name section: {}", e),
                         }
                     }
                 }
-                wasmparser::Name::Local(l) => {
-                    let mut reader = l.get_indirect_map()?;
-                    for _ in 0..reader.get_indirect_count() {
-                        let name = reader.read()?;
-                        let func_id = indices.get_func(name.indirect_index)?;
-                        let mut map = name.get_map()?;
-                        for _ in 0..map.get_count() {
-                            let naming = map.read()?;
+                wasmparser::Name::Local(indirect_map) => {
+                    for name in indirect_map {
+                        let name = name?;
+                        let func_id = indices.get_func(name.index)?;
+                        for naming in name.names {
+                            let naming = naming?;
                             // Looks like tools like `wat2wasm` generate empty
                             // names for locals if they aren't specified, so
                             // just ignore empty names which would in theory

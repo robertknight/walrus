@@ -13,8 +13,9 @@ use crate::ty::TypeId;
 use crate::ty::ValType;
 use std::cmp;
 use std::collections::BTreeMap;
+use std::ops::Range;
 use wasm_encoder::Encode;
-use wasmparser::{FuncValidator, FunctionBody, Range, ValidatorResources};
+use wasmparser::{FuncValidator, FunctionBody, ValidatorResources};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -373,7 +374,7 @@ impl Module {
             for _ in 0..reader.read_var_u32()? {
                 let pos = reader.original_position();
                 let count = reader.read_var_u32()?;
-                let ty = reader.read_type()?;
+                let ty = reader.read::<wasmparser::ValType>()?;
                 validator.define_locals(pos, count, ty)?;
                 let ty = ValType::parse(&ty)?;
                 for _ in 0..count {

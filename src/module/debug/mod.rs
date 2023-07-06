@@ -5,6 +5,7 @@ use crate::{CustomSection, Function, InstrLocId, Module, ModuleFunctions, RawCus
 use gimli::*;
 use id_arena::Id;
 use std::cmp::Ordering;
+use std::ops::Range;
 
 use self::dwarf::ConvertContext;
 
@@ -32,7 +33,7 @@ enum CodeAddress {
 /// Converts original code address to CodeAddress
 struct CodeAddressConverter {
     /// Function range based convert table
-    address_convert_table: Vec<(wasmparser::Range, Id<Function>)>,
+    address_convert_table: Vec<(Range<usize>, Id<Function>)>,
     /// Instrument based convert table
     instrument_address_convert_table: Vec<(usize, InstrLocId)>,
 }
@@ -41,7 +42,7 @@ impl CodeAddressConverter {
     fn from_emit_context(funcs: &ModuleFunctions) -> Self {
         let mut address_convert_table = funcs
             .iter_local()
-            .filter_map(|(func_id, func)| func.original_range.map(|range| (range, func_id)))
+            .filter_map(|(func_id, func)| func.original_range.clone().map(|range| (range, func_id)))
             .collect::<Vec<_>>();
 
         let mut instrument_address_convert_table = funcs
@@ -70,7 +71,7 @@ impl CodeAddressConverter {
             };
         }
 
-        let previous_range_comparor = |range: &(wasmparser::Range, Id<Function>)| {
+        let previous_range_comparor = |range: &(Range<usize>, Id<Function>)| {
             if range.0.end < address {
                 Ordering::Less
             } else if address <= range.0.start {
@@ -79,7 +80,7 @@ impl CodeAddressConverter {
                 Ordering::Equal
             }
         };
-        let next_range_comparor = |range: &(wasmparser::Range, Id<Function>)| {
+        let next_range_comparor = |range: &(Range<usize>, Id<Function>)| {
             if range.0.end <= address {
                 Ordering::Less
             } else if address < range.0.start {
@@ -245,7 +246,7 @@ fn dwarf_address_converter() {
         crate::FunctionBuilder::new(&mut module.types, &[], &[]),
     );
 
-    func.original_range = Some(wasmparser::Range { start: 20, end: 30 });
+    func.original_range = Some(Range { start: 20, end: 30 });
 
     let id = module.funcs.add_local(func);
 

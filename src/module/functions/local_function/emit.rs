@@ -350,7 +350,7 @@ impl<'instr> Visitor<'instr> for Emit<'_> {
                     I8x16MinU => Instruction::I8x16MinU,
                     I8x16MaxS => Instruction::I8x16MaxS,
                     I8x16MaxU => Instruction::I8x16MaxU,
-                    I8x16RoundingAverageU => Instruction::I8x16AvgrU,
+                    I8x16AvgrU => Instruction::I8x16AvgrU,
 
                     I16x8NarrowI32x4S => Instruction::I16x8NarrowI32x4S,
                     I16x8NarrowI32x4U => Instruction::I16x8NarrowI32x4U,
@@ -368,7 +368,7 @@ impl<'instr> Visitor<'instr> for Emit<'_> {
                     I16x8MinU => Instruction::I16x8MinU,
                     I16x8MaxS => Instruction::I16x8MaxS,
                     I16x8MaxU => Instruction::I16x8MaxU,
-                    I16x8RoundingAverageU => Instruction::I16x8AvgrU,
+                    I16x8AvgrU => Instruction::I16x8AvgrU,
 
                     I32x4Shl => Instruction::I32x4Shl,
                     I32x4ShrS => Instruction::I32x4ShrS,

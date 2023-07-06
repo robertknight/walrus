@@ -133,25 +133,22 @@ impl Module {
         ids: &IndicesToIds,
     ) -> Result<()> {
         log::debug!("parse export section");
-        use wasmparser::ExternalKind::*;
+        use wasmparser::ExternalKind;
 
         for entry in section {
             let entry = entry?;
             let item = match entry.kind {
-                Function => ExportItem::Function(ids.get_func(entry.index)?),
-                Table => ExportItem::Table(ids.get_table(entry.index)?),
-                Memory => ExportItem::Memory(ids.get_memory(entry.index)?),
-                Global => ExportItem::Global(ids.get_global(entry.index)?),
-                Type | Module | Instance => {
-                    unimplemented!("module linking not supported");
-                }
-                Tag => {
+                ExternalKind::Func => ExportItem::Function(ids.get_func(entry.index)?),
+                ExternalKind::Table => ExportItem::Table(ids.get_table(entry.index)?),
+                ExternalKind::Memory => ExportItem::Memory(ids.get_memory(entry.index)?),
+                ExternalKind::Global => ExportItem::Global(ids.get_global(entry.index)?),
+                ExternalKind::Tag => {
                     unimplemented!("exception handling not supported");
                 }
             };
             self.exports.arena.alloc_with_id(|id| Export {
                 id,
-                name: entry.field.to_string(),
+                name: entry.name.to_string(),
                 item,
             });
         }

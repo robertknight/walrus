@@ -142,12 +142,8 @@ pub enum ValType {
 }
 
 impl ValType {
-    pub(crate) fn from_wasmparser_type(ty: wasmparser::Type) -> Result<Box<[ValType]>> {
-        let v = match ty {
-            wasmparser::Type::EmptyBlockType => Vec::new(),
-            _ => vec![ValType::parse(&ty)?],
-        };
-        Ok(v.into_boxed_slice())
+    pub(crate) fn from_wasmparser_type(ty: wasmparser::ValType) -> Result<Box<[ValType]>> {
+        Ok(Box::new([ValType::parse(&ty)?]))
     }
 
     pub(crate) fn to_wasmencoder_type(&self) -> wasm_encoder::ValType {
@@ -162,15 +158,33 @@ impl ValType {
         }
     }
 
-    pub(crate) fn parse(input: &wasmparser::Type) -> Result<ValType> {
+    pub(crate) fn parse_ref(input: &wasmparser::RefType) -> Result<ValType> {
+        if input.is_func_ref() {
+            Ok(ValType::Funcref)
+        } else if input.is_extern_ref() {
+            Ok(ValType::Externref)
+        } else {
+            bail!("not a ref type")
+        }
+    }
+
+    pub(crate) fn parse_heap(input: &wasmparser::HeapType) -> Result<ValType> {
         match input {
-            wasmparser::Type::I32 => Ok(ValType::I32),
-            wasmparser::Type::I64 => Ok(ValType::I64),
-            wasmparser::Type::F32 => Ok(ValType::F32),
-            wasmparser::Type::F64 => Ok(ValType::F64),
-            wasmparser::Type::V128 => Ok(ValType::V128),
-            wasmparser::Type::ExternRef => Ok(ValType::Externref),
-            wasmparser::Type::FuncRef => Ok(ValType::Funcref),
+            wasmparser::HeapType::Func => Ok(ValType::Funcref),
+            wasmparser::HeapType::Extern => Ok(ValType::Externref),
+            _ => bail!("unsupported heap type"),
+        }
+    }
+
+    pub(crate) fn parse(input: &wasmparser::ValType) -> Result<ValType> {
+        match input {
+            wasmparser::ValType::I32 => Ok(ValType::I32),
+            wasmparser::ValType::I64 => Ok(ValType::I64),
+            wasmparser::ValType::F32 => Ok(ValType::F32),
+            wasmparser::ValType::F64 => Ok(ValType::F64),
+            wasmparser::ValType::V128 => Ok(ValType::V128),
+            wasmparser::ValType::Ref(wasmparser::RefType::EXTERNREF) => Ok(ValType::Externref),
+            wasmparser::ValType::Ref(wasmparser::RefType::FUNCREF) => Ok(ValType::Funcref),
             _ => bail!("not a value type"),
         }
     }
